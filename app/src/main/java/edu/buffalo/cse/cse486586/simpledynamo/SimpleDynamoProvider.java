@@ -156,7 +156,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             fos = context.openFileOutput(key, context.MODE_PRIVATE);
             fos.write(value.getBytes());
             fos.close();
-            Log.v("Me Log insert", value.toString());
+            Log.v("Me Log insert", key.toString());
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         } catch (IOException e) {
@@ -257,6 +257,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             crOther.moveToFirst();
             int keyIndex = crOther.getColumnIndex(KEY_FIELD);
             int valueIndex = crOther.getColumnIndex(VALUE_FIELD);
+            Log.v("Me Log ", cr.getCount() + " Total Count before adding: ");
             do {
                 if (crOther.getCount() == 0) break;
                 String[] row = new String[2];
@@ -264,6 +265,8 @@ public class SimpleDynamoProvider extends ContentProvider {
                 row[1] = crOther.getString(valueIndex);
                 cr.addRow(row);
             }while (crOther.moveToNext());
+            Log.v("Me Log ", cr.getCount() + " Total Count after adding: ");
+            Log.v("Me Log ", crOther.getCount() + " Total other Count adding: ");
         } else {
             boolean flag = belongToSelf(selection);
             if (flag) {
@@ -275,10 +278,12 @@ public class SimpleDynamoProvider extends ContentProvider {
                     cr.addRow(row);
                 }
             } else {
+                Log.wtf("Me Log", "querying from other node");
                 cr = getDataFromOtherAVD(selection, selectionArgs);
             }
             Log.v("Me Log query", selection);
         }
+        Log.v("Me Log query", "Final Result for query: " + selection + " count " + cr.getCount());
         return cr;
     }
 
@@ -338,14 +343,19 @@ public class SimpleDynamoProvider extends ContentProvider {
             } else {
                 uniqueId = myPort + counter++;
             }
+            Log.v("Me Log query", "Start Query and asking data from others " + originPort + " unique ID " + uniqueId );
             try {
                 if (!node.getSuccessor().equals(originPort)) {
                     String[] msgToSend = {QUERY, node.getSuccessor(), selection, originPort, uniqueId};
                     sendMessageToClient(msgToSend);
+                    Log.v("Me Log ", "Waiting for data to come for selection "+ selection + " startport " + originPort);
                     while (!hmResult.containsKey(uniqueId)) {
                         Thread.sleep(100);
                     }
                     mat = hmResult.get(uniqueId);
+                }
+                else {
+                    Log.wtf("Me Log ", " No need to get data from next node " + node.getSuccessor() + " origin " + originPort);
                 }
             } catch (InterruptedException e) {
                 e.printStackTrace();
@@ -373,6 +383,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
             }
             mat = hmResult.get(uniqueId);
+            Log.w("Me Log ", "Got the data from other avd key: " + selection + " port " + remotePort );
         }
         return mat;
     }
@@ -520,8 +531,15 @@ public class SimpleDynamoProvider extends ContentProvider {
                     keyValues += key + " " + value + " ";
                 }
             }  while (cr.moveToNext());
-            String[] msgToSend = {RESULT, originPorts[0], uniqueId, keyValues.trim()};
-            sendMessageToClient(msgToSend);
+            if (FULLDATA.equals(keyString)) {
+                String[] msgToSend = {RESULT, node.getPredecessor(), uniqueId, keyValues.trim()};
+                sendMessageToClient(msgToSend);
+            } else {
+               //if we are fetching only one key valye then return
+               //direcctly to the rewuester
+                String[] msgToSend = {RESULT, originPorts[0], uniqueId, keyValues.trim()};
+                sendMessageToClient(msgToSend);
+            }
         }
 
         private void updateResultMapObject(String msg) {
@@ -537,6 +555,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 cr.addRow(row);
             }
             String uniqueId = data[1];
+            Log.v("Me Log " , "Putting the data for key " + uniqueId);
             hmResult.put(uniqueId, cr);
         }
 

@@ -7,6 +7,7 @@ import android.util.Log;
  */
 public class CircularLinkedList {
     private Node node;
+
     public static class Node implements Comparable<Node> {
         public Node next;
         private Node prev;
@@ -89,8 +90,7 @@ public class CircularLinkedList {
         if (tmp.next == null) {
             return true;
         }
-        Log.v("Me Log", this.toString());
-        Log.v("Me Log", this.node.key + " prev: " + this.node.prev.key);
+
 
         if ((tmp.compareTo(newNode) >= 0 && tmp.prev.compareTo(newNode) < 0) ||
                 ((tmp.compareTo(tmp.prev)) < 0 && (
@@ -106,15 +106,29 @@ public class CircularLinkedList {
     public String getSuccessor() {
         if (this.node.next != null)
             return this.node.next.port;
-        else
+        else {
+            Log.wtf("Me Log ", "Why successor is null");
             return null;
+        }
+    }
+
+
+    public String getPredecessor() {
+        if (this.node.prev != null)
+            return this.node.prev.port;
+        else {
+            Log.wtf("Me Log ", "Why predecessor is null");
+            return null;
+        }
     }
 
     public String getSecondSuccessor() {
         if (this.node.next != null && this.node.next.next != null)
             return this.node.next.next.port;
-        else
+        else {
+            Log.wtf("Me Log ", "Why second successor is null");
             return null;
+        }
     }
 
     public String getCoordinator(String key) {
