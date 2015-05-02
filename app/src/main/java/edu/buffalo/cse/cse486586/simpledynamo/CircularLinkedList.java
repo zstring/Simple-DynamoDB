@@ -13,9 +13,11 @@ public class CircularLinkedList {
         private Node prev;
         private String key;
         private String port;
+        public boolean active;
         public Node(String k, String port) {
             this.key = k;
             this.port = port;
+            this.active = true;
         }
 
         public int compareTo(Node that) {
@@ -63,6 +65,7 @@ public class CircularLinkedList {
 
     public void addNode(String k, String port) {
         Node newNode = new Node(k, port);
+
         Node tmp = this.node;
         if (tmp.next == null) {
             tmp.next = newNode;
@@ -72,16 +75,28 @@ public class CircularLinkedList {
             this.node.prev = newNode;
             return;
         }
-        while( !((tmp.compareTo(newNode) < 0 && tmp.next.compareTo(newNode) > 0) ||
-                  tmp.compareTo(tmp.next) > 0 && (
-                           tmp.compareTo(newNode) < 0 || tmp.next.compareTo(newNode) > 0))) {
-            tmp = tmp.next;
-        }
+        Node tmp_check = this.node;
+        while (tmp_check.compareTo(newNode) != 0) {
+            tmp_check = tmp_check.next;
+            // break if it loops onces
+            if (tmp_check.compareTo(this.node) == 0) break;
 
-        newNode.next = tmp.next;
-        newNode.next.prev = newNode;
-        tmp.next = newNode;
-        newNode.prev = tmp;
+        }
+        if (tmp_check.compareTo(newNode) == 0) {
+            tmp_check.active = true;
+            return;
+        } else {
+            while (!((tmp.compareTo(newNode) < 0 && tmp.next.compareTo(newNode) > 0) ||
+                    tmp.compareTo(tmp.next) > 0 && (
+                            tmp.compareTo(newNode) < 0 || tmp.next.compareTo(newNode) > 0))) {
+                tmp = tmp.next;
+            }
+
+            newNode.next = tmp.next;
+            newNode.next.prev = newNode;
+            tmp.next = newNode;
+            newNode.prev = tmp;
+        }
     }
 
     public Boolean belongToSelf(String key) {
@@ -103,6 +118,25 @@ public class CircularLinkedList {
         }
     }
 
+
+    public boolean belongToPredecessor(String key) {
+        Node newNode = new Node(key, "");
+        Node tmp = this.node.prev;
+        if (tmp.next == null) {
+            return true;
+        }
+
+        if ((tmp.compareTo(newNode) >= 0 && tmp.prev.compareTo(newNode) < 0) ||
+                ((tmp.compareTo(tmp.prev)) < 0 && (
+                        tmp.compareTo(newNode) >= 0 || tmp.prev.compareTo(newNode) < 0))) {
+            Log.v("Me Log Linked List", "yes Belong to My Predecessor");
+            return  true;
+        } else {
+            Log.v("Me Log Linked List", "no doesn't belong to My Predecessor " + tmp.port);
+            return false;
+        }
+    }
+
     public String getSuccessor() {
         if (this.node.next != null)
             return this.node.next.port;
@@ -110,6 +144,43 @@ public class CircularLinkedList {
             Log.wtf("Me Log ", "Why successor is null");
             return null;
         }
+    }
+
+    public boolean CheckMySuccessors(String newNodeId) {
+        if (this.getSuccessor().equals(newNodeId) || this.getSecondSuccessor().equals(newNodeId)) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean CheckMyPredecessor(String newNodeId) {
+        if (this.getPredecessor().equals(newNodeId)) {
+            return true;
+        }
+        return false;
+    }
+
+    public String[] getKeySuccessor(String k) {
+        String[] results = new String[2];
+        String coor_port = getCoordinator(k);
+        Node tmp = this.node;
+        while (!tmp.port.equals(coor_port)) {
+            tmp = tmp.next;
+        }
+        tmp = tmp.next;
+        if (tmp != null) {
+            results[0] = tmp.port;
+            tmp = tmp.next;
+            if (tmp != null) {
+                results[1] = tmp.port;
+            } else {
+                Log.wtf("Me Log ", "Why second corrd  is null");
+            }
+        }
+        else {
+            Log.wtf("Me Log ", "Why first corrd is null");
+        }
+        return results;
     }
 
 
@@ -123,6 +194,15 @@ public class CircularLinkedList {
     }
 
     public String getSecondSuccessor() {
+        if (this.node.next != null && this.node.next.next != null)
+            return this.node.next.next.port;
+        else {
+            Log.wtf("Me Log ", "Why second successor is null");
+            return null;
+        }
+    }
+
+    public String getKeySecondSuccessor(String k) {
         if (this.node.next != null && this.node.next.next != null)
             return this.node.next.next.port;
         else {
