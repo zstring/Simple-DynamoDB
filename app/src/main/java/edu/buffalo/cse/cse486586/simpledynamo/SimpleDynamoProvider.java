@@ -137,11 +137,10 @@ public class SimpleDynamoProvider extends ContentProvider {
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         // TODO Auto-generated method stub
-        Log.v("Me Log", "On insert starting");
-
-        String key = values.getAsString(KEY_FIELD);
-        Log.w("Me Log insert", "aquring lock for new key lock " + key);
+        Log.v("Me Log", "On insert starting init_lock : " + init_Lock);
         Lock lock = hmLock.get(myPort);
+        String key = values.getAsString(KEY_FIELD);
+        Log.w("Me Log insert", "aquring Global lock for new key lock " + key);
         lock.lock();
         Lock lock_key = hmLock.get(key);
         if (lock_key == null) {
@@ -156,6 +155,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         boolean flag = belongToSelf(key);
         if (flag) {
             insertData(values);
+            hmResult_Insert.put(id, 1);
         } else {
             sendToSuccessorAvd(values, id);
         }
@@ -163,6 +163,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         while (!hmResult_Insert.containsKey(id) || hmResult_Insert.get(id) < 2) {
             try {
                 Thread.sleep(10);
+                Log.w("Me Log insert", "waiting inside while loop ");
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -281,7 +282,9 @@ public class SimpleDynamoProvider extends ContentProvider {
         sendJoiningMessage();
         Lock lock = new ReentrantLock();
         hmLock.put(myPort, lock);
-//        lock.lock();
+        init_Lock = false;
+        //lock.lock();
+
         Log.v("Me Log", "On Create After applying Lock");
         return false;
     }
@@ -312,18 +315,22 @@ public class SimpleDynamoProvider extends ContentProvider {
     public Cursor query(Uri uri, String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
         // TODO Auto-generated method stub
+        Log.v("Me Log", "On query starting init_lock : " + init_Lock);
+
         String key = selection;
-        Log.w("Me Log query", "aquiring the lock for key lock " + key);
+        Log.w("Me Log query", "Try to get global lock for key lock " + key);
         Lock lock = hmLock.get(myPort);
         lock.lock();
+        Log.w("Me Log query", "Got the Global Lock for " + key);
         Lock lock_key = hmLock.get(key);
         if (lock_key == null) {
             lock_key = new ReentrantLock();
             hmLock.put(key, lock_key);
         }
         lock_key.lock();
+        Log.w("Me Log query", "Got the query key Lock for " + key);
         lock.unlock();
-        Log.w("Me Log query", "unlock the lock for key lock " + key);
+        Log.w("Me Log query", "unlock the global lock for key lock " + key);
         String[] columns = {KEY_FIELD, VALUE_FIELD};
         MatrixCursor cr = new MatrixCursor(columns);
         if (SELFDATA.equals(selection)) {
@@ -389,7 +396,7 @@ public class SimpleDynamoProvider extends ContentProvider {
     }
 
     private String getValueFromKey(String fileName) {
-        String valueContent = null;
+        String valueContent = "";
         try {
             File fl = new File(fileName);
             FileInputStream fis = context.openFileInput(fileName);
@@ -443,6 +450,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                     Log.v("Me Log ", "Waiting for data to come for selection " + selection + " start port " + originPort);
                     while (!hmResult.containsKey(uniqueId) || hmResult.get(uniqueId) < REMOTE_PORTS.length - 1) {
                         Thread.sleep(10);
+                        Log.v("Me Log ", "waiting Data from other avd ");
                     }
                     mat = hmCursor.get(uniqueId);
                     hmCursor.remove(uniqueId);
@@ -473,6 +481,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             while (!hmResult.containsKey(uniqueId)) {
                 try {
                     Thread.sleep(10);
+                    Log.v("Me Log", "Waiting for data from other avd");
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }

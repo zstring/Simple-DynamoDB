@@ -110,10 +110,10 @@ public class CircularLinkedList {
         if ((tmp.compareTo(newNode) >= 0 && tmp.prev.compareTo(newNode) < 0) ||
                 ((tmp.compareTo(tmp.prev)) < 0 && (
                         tmp.compareTo(newNode) >= 0 || tmp.prev.compareTo(newNode) < 0))) {
-            Log.v("Me Log Linked List", "yes Belong to ME");
+//            Log.v("Me Log Linked List", "yes Belong to ME");
             return  true;
         } else {
-            Log.v("Me Log Linked List", "no doesn't belong to ME " + tmp.port);
+//            Log.v("Me Log Linked List", "no doesn't belong to ME " + tmp.port);
             return false;
         }
     }
@@ -129,10 +129,10 @@ public class CircularLinkedList {
         if ((tmp.compareTo(newNode) >= 0 && tmp.prev.compareTo(newNode) < 0) ||
                 ((tmp.compareTo(tmp.prev)) < 0 && (
                         tmp.compareTo(newNode) >= 0 || tmp.prev.compareTo(newNode) < 0))) {
-            Log.v("Me Log Linked List", "yes Belong to My Predecessor");
+//            Log.v("Me Log Linked List", "yes Belong to My Predecessor");
             return  true;
         } else {
-            Log.v("Me Log Linked List", "no doesn't belong to My Predecessor " + tmp.port);
+//            Log.v("Me Log Linked List", "no doesn't belong to My Predecessor " + tmp.port);
             return false;
         }
     }
@@ -219,16 +219,16 @@ public class CircularLinkedList {
                 ((tmp.compareTo(tmp.prev)) < 0 && (
                         tmp.compareTo(newNode) >= 0 || tmp.prev.compareTo(newNode) < 0)))) {
             tmp = tmp.next;
-            Log.v("Me Log", "Tmp.next while getCoordinator");
+//            Log.v("Me Log", "Tmp.next while getCoordinator");
         }
 
-        if ((tmp.compareTo(newNode) >= 0 && tmp.prev.compareTo(newNode) < 0) ||
-                ((tmp.compareTo(tmp.prev)) < 0 && (
-                        tmp.compareTo(newNode) >= 0 || tmp.prev.compareTo(newNode) < 0))) {
-            Log.v("Me Log", "Its in the range getCoordinator " + tmp.port);
-        } else {
-            Log.v("Me Log", "Its NOT  the range getCoordinator " + tmp.port);
-        }
+//        if ((tmp.compareTo(newNode) >= 0 && tmp.prev.compareTo(newNode) < 0) ||
+//                ((tmp.compareTo(tmp.prev)) < 0 && (
+//                        tmp.compareTo(newNode) >= 0 || tmp.prev.compareTo(newNode) < 0))) {
+//            Log.v("Me Log", "Its in the range getCoordinator " + tmp.port);
+//        } else {
+//            Log.v("Me Log", "Its NOT  the range getCoordinator " + tmp.port);
+//        }
         return tmp.port;
     }
 
