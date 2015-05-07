@@ -17,11 +17,13 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.Formatter;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executor;
@@ -64,9 +66,11 @@ public class SimpleDynamoProvider extends ContentProvider {
     private static final String[] REMOTE_PORTS = {"11108", "11112", "11116", "11120", "11124"};
     private static final int SERVER_PORT = 10000;
     private static final int TOTAL_AVDS = 5;
+    private static final int TIME_OUT = 1000;
     private static int deliveryCount = -1;
     private static int counter = 0;
     private static int insert_counter = 0;
+    private static int recover_counter = 0;
     private static String myId;
     private static String myPort;
     private static final String URI_STRING = "edu.buffalo.cse.cse486586.simpledynamo.provider";
@@ -76,18 +80,33 @@ public class SimpleDynamoProvider extends ContentProvider {
     private static Context context;
     private Uri mUri;
     private static CircularLinkedList node;
-    private static HashSet<ContentValues> bufferData = new HashSet<>();
     private static HashMap<String, Integer> hmResult = new HashMap<>();
     private static HashMap<String, MatrixCursor> hmCursor = new HashMap<>();
+    private static HashMap<String, ArrayList<String>> hmCursorMap = new HashMap<>();
+    private static HashMap<String, ArrayList<ValueAndVersion>> hmCursorData = new HashMap<>();
     private static HashMap<String, Lock> hmLock = new HashMap<>();
     private static HashMap<String, Integer> hmResult_Insert = new HashMap<>();
-    private static BlockingQueue<Boolean> blocking_queue;
     private static Boolean init_Lock = false;
     int poolSize = 10;
     int maxPoolSize = 20;
     int maxTime = 40;
     private BlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<Runnable>(maxPoolSize);
     private Executor threadPoolExecutor = new ThreadPoolExecutor(poolSize, maxPoolSize, maxTime, TimeUnit.SECONDS, workQueue);
+
+    private class ValueAndVersion implements Comparable<ValueAndVersion> {
+        String value;
+        String key;
+        int version;
+        public ValueAndVersion(String v, String k, int ver) {
+            this.value = v;
+            this.key = k;
+            this.version = ver;
+        }
+        @Override
+        public int compareTo(ValueAndVersion that) {
+            return version - that.version;
+        }
+    }
 
     private void sendJoiningMessage() {
         String[] msgToSend = {NEWJOIN, myPort};
@@ -107,11 +126,17 @@ public class SimpleDynamoProvider extends ContentProvider {
             if (selectionArgs != null) {
                 originator = selectionArgs[1];
             }
-            String[] msgToSend = {"DELETE", node.getSuccessor(), originator, selection};
+            String[] msgToSend = {DELETE, node.getSuccessor(), originator, selection};
             if (!originator.equals(node.getSuccessor()))
                 sendMessageToClient(msgToSend);
         } else {
             context.deleteFile(fileName);
+            if (selectionArgs == null) {
+                String[] msgToSend = {DELETE, node.getSuccessor(), myPort, selection};
+                    sendMessageToClient(msgToSend);
+                String[] msgToSend1 = {DELETE, node.getSecondSuccessor(), myPort, selection};
+                sendMessageToClient(msgToSend1);
+            }
         }
         return 0;
     }
@@ -134,13 +159,9 @@ public class SimpleDynamoProvider extends ContentProvider {
         return null;
     }
 
-    @Override
-    public Uri insert(Uri uri, ContentValues values) {
-        // TODO Auto-generated method stub
-        Log.v("Me Log", "On insert starting init_lock : " + init_Lock);
+    private void acquired_lock(String key) {
         Lock lock = hmLock.get(myPort);
-        String key = values.getAsString(KEY_FIELD);
-        Log.w("Me Log insert", "aquring Global lock for new key lock " + key);
+        Log.w("Me Log insert", "acquring Global lock for new key lock " + key);
         lock.lock();
         Lock lock_key = hmLock.get(key);
         if (lock_key == null) {
@@ -149,6 +170,41 @@ public class SimpleDynamoProvider extends ContentProvider {
         }
         lock_key.lock();
         lock.unlock();
+
+    }
+
+    private void release_lock(String key) {
+        Lock lock_key = hmLock.get(key);
+        lock_key.unlock();
+    }
+
+    private synchronized void setup_lock() {
+//        if (!init_Lock) {
+//            Lock lock = hmLock.get(myPort);
+//            try {
+//                if (lock.tryLock(300, TimeUnit.MILLISECONDS)) {
+//                    Log.w("Me Log", "able acquired the lock insert/query method");
+//                } else {
+//                    Log.w("Me Log", "not able acquired the lock insert/query method");
+//                }
+//            } catch (InterruptedException e) {
+//                e.printStackTrace();
+//            }
+//            Log.w("Me Log", "before unlock insert/query method");
+//            lock.unlock();
+//            Log.w("Me Log", "after unlock  insert/query method");
+//            init_Lock = true;
+//        }
+    }
+
+    @Override
+    public Uri insert(Uri uri, ContentValues values) {
+        // TODO Auto-generated method stub
+        setup_lock();
+        Log.v("Me Log", "On insert starting init_lock : " + init_Lock);
+        String key = values.getAsString(KEY_FIELD);
+        acquired_lock(key);
+
         Log.w("Me Log insert", "unlock for new key lock " + key);
         insert_counter++;
         String id = myPort + insert_counter;
@@ -160,15 +216,21 @@ public class SimpleDynamoProvider extends ContentProvider {
             sendToSuccessorAvd(values, id);
         }
         sendToSuccessorAvdForReplication(values, id);
-        while (!hmResult_Insert.containsKey(id) || hmResult_Insert.get(id) < 2) {
+        int avoid_deadlock = 1;
+        while ((!hmResult_Insert.containsKey(id) || hmResult_Insert.get(id) < 2)
+                && avoid_deadlock < 100) {
             try {
                 Thread.sleep(10);
+                avoid_deadlock += 1;
                 Log.w("Me Log insert", "waiting inside while loop ");
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         }
-        lock_key.unlock();
+        if (avoid_deadlock > 99) {
+            Log.w("Me Log insert", "Broke the loop to avoid deadlock");
+        }
+        release_lock(key);
         Log.w("Me Log insert", "unlock for Actual key lock " + key);
         return uri;
     }
@@ -178,7 +240,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             String hashed = genHash(key);
             return node.belongToSelf(hashed);
         } catch (NoSuchAlgorithmException ex) {
-            Log.e("Me Log Error", " Error in belong To Self simpledynamo " + ex.getMessage());
+            Log.e("Me Log Error", " Error in belong To Self simple dynamo " + ex.getMessage());
         }
         return false;
     }
@@ -188,7 +250,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             String hashed = genHash(key);
             return node.belongToPredecessor(hashed);
         } catch (NoSuchAlgorithmException ex) {
-            Log.e("Me Log Error", " Error in belong To PREDECESSOR simpledynamo " + ex.getMessage());
+            Log.e("Me Log Error", " Error in belong To PREDECESSOR simple dynamo " + ex.getMessage());
         }
         return false;
     }
@@ -198,6 +260,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         FileOutputStream fos = null;
         String key = values.getAsString(KEY_FIELD);
         String value = values.getAsString(VALUE_FIELD);
+        Log.v("Me Log" , "Key:" + key + ":, value:"+value + ";");
         try {
             fos = context.openFileOutput(key, context.MODE_PRIVATE);
             fos.write(value.getBytes());
@@ -218,8 +281,6 @@ public class SimpleDynamoProvider extends ContentProvider {
             e.printStackTrace();
         }
 
-//        String succPort1 = this.node.getSuccessor();
-//        String succPort2 = this.node.getSecondSuccessor();
         String[] succPort = this.node.getKeySuccessor(key);
         String[] msgToSendF = {MESSAGE_REPLICATE, succPort[0], values.getAsString(KEY_FIELD),
                 values.getAsString(VALUE_FIELD), myPort, id};
@@ -283,9 +344,9 @@ public class SimpleDynamoProvider extends ContentProvider {
         Lock lock = new ReentrantLock();
         hmLock.put(myPort, lock);
         init_Lock = false;
-        //lock.lock();
+//        lock.lock();
 
-        Log.v("Me Log", "On Create After applying Lock");
+        Log.v("Me LogCreate", "On Create After applying Lock");
         return false;
     }
 
@@ -316,20 +377,10 @@ public class SimpleDynamoProvider extends ContentProvider {
                         String[] selectionArgs, String sortOrder) {
         // TODO Auto-generated method stub
         Log.v("Me Log", "On query starting init_lock : " + init_Lock);
-
+        setup_lock();
         String key = selection;
         Log.w("Me Log query", "Try to get global lock for key lock " + key);
-        Lock lock = hmLock.get(myPort);
-        lock.lock();
-        Log.w("Me Log query", "Got the Global Lock for " + key);
-        Lock lock_key = hmLock.get(key);
-        if (lock_key == null) {
-            lock_key = new ReentrantLock();
-            hmLock.put(key, lock_key);
-        }
-        lock_key.lock();
-        Log.w("Me Log query", "Got the query key Lock for " + key);
-        lock.unlock();
+        acquired_lock(key);
         Log.w("Me Log query", "unlock the global lock for key lock " + key);
         String[] columns = {KEY_FIELD, VALUE_FIELD};
         MatrixCursor cr = new MatrixCursor(columns);
@@ -354,13 +405,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         } else {
             boolean flag = belongToSelf(selection);
             if (flag) {
-                String valueContent = getValueFromKey(selection);
-                if (!valueContent.isEmpty()) {
-                    String[] row = new String[2];
-                    row[0] = selection;
-                    row[1] = valueContent;
-                    cr.addRow(row);
-                }
+                cr = getDataFromOtherAVD(selection, null);
             } else {
                 cr = getDataFromOtherAVD(selection, selectionArgs);
                 Log.wtf("Me Log", "querying from other node " );
@@ -371,7 +416,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             Log.v("Me Log query", selection);
         }
         Log.v("Me Log query", "Final Result for query: " + selection + " count " + cr.getCount());
-        lock_key.unlock();
+        release_lock(key);
         Log.w("Me Log query", "unlock for Actual key lock " + key);
         return cr;
     }
@@ -383,7 +428,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         if (fileLists != null) {
             for (String fileName : fileLists) {
                 String valueContent = getValueFromKey(fileName);
-                if (!valueContent.isEmpty()) {
+                if (!valueContent.trim().isEmpty()) {
                     String[] row = new String[2];
                     row[0] = fileName;
                     row[1] = valueContent;
@@ -396,7 +441,8 @@ public class SimpleDynamoProvider extends ContentProvider {
     }
 
     private String getValueFromKey(String fileName) {
-        String valueContent = "";
+        String version = "0";
+        String values = "";
         try {
             File fl = new File(fileName);
             FileInputStream fis = context.openFileInput(fileName);
@@ -406,7 +452,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 sb.append((char) val);
                 val = fis.read();
             }
-            valueContent = sb.toString();
+            values = sb.toString();
             fis.close();
 
         } catch (FileNotFoundException e) {
@@ -414,7 +460,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        return valueContent;
+        return values;
     }
 
     private synchronized String[] getPortAndUniqueId(String[] selectionArgs) {
@@ -434,6 +480,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         String uniqueId = "";
         String[] columns = {KEY_FIELD, VALUE_FIELD};
         MatrixCursor mat = new MatrixCursor(columns);
+
         //if there is only onde node in the system
         if (FULLDATA.equals(selection)) {
             if (node.getSuccessor() == null)
@@ -520,75 +567,73 @@ public class SimpleDynamoProvider extends ContentProvider {
         protected Void doInBackground(ServerSocket... sockets) {
             ServerSocket serverSocket = sockets[0];
             while (true) {
+                String msg = "";
                 try {
                     Socket clientS = serverSocket.accept();
                     InputStreamReader is = new InputStreamReader(clientS.getInputStream());
-//                    BufferedReader br = new BufferedReader(is);
                     ObjectInputStream ois = new ObjectInputStream(clientS.getInputStream());
-//                    String msg = br.readLine();
-                    String msg = (String)ois.readObject();
+                    msg = (String) ois.readObject();
                     Log.v("Me Log1 ", "Server Message " + msg);
 
                     ObjectOutputStream oos = new ObjectOutputStream(clientS.getOutputStream());
                     oos.writeObject(new String("ACK"));
                     oos.flush();
-                    String type = msg.split(" ")[0];
+                    oos.close();
+                    ois.close();
+                    clientS.close();
+                } catch (SocketTimeoutException e) {
+                    Log.e("Me Log Error: ", e.getMessage() + " Server Catch  Socket Time-out Exception");
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    Log.v("Me Log Error: ", e.getMessage() + "  Server Catch IO Exception Exception");
+                    e.printStackTrace();
+                } catch (ClassNotFoundException e) {
+                    e.printStackTrace();
+                }
+                String type = msg.split(" ")[0];
 
-                    if (JOIN.equals(type) || NEWJOIN.equals(type)) {
-                        updateRingWithNewNode(msg.split(" ")[1]);
-                    } else if (NODE_UPDATE.equals(type)) {
-                        //Msg contains type and hashed node id and node id of all the nodes
-                        // in the circular list return by the 5554 response for joining request
-                        updateNodeList(msg);
-                        Log.v("Me Log Node List", node.toString());
-                    } else if (MESSAGE.equals(type) || MESSAGE_REPLICATE.equals(type)) {
-                        String key = msg.split(" ")[1];
-                        String value = msg.split(" ")[2];
-                        String originator_port = msg.split(" ")[3];
-                        String insert_id = msg.split(" ")[4];
-                        ContentValues cv = new ContentValues();
-                        cv.put(KEY_FIELD, key);
-                        cv.put(VALUE_FIELD, value);
-                        //Message then treat it as normal insert
-                        //other wise directly insert it as replication
-                        if (MESSAGE.equals(type)) {
-                            insertData(cv);
-                            //if message came from client task it means that
-                            // it belongs to me only
-//                            insert(mUri, cv);
-                        } else if (MESSAGE_REPLICATE.equals(type)) {
-                            insertData(cv);
-                        }
-                        sendAckToOriginator(originator_port, insert_id);
-                    } else if (QUERY.equals(type)) {
-                        publishProgress(msg);
-                    } else if (RESULT.equals(type)) {
-                        updateResultMapObject(msg);
-                    } else if (DELETE.equals(type)) {
-                        String[] selectionArgs = {msg.split(" ")[1]};
-                        delete(mUri, msg.split(" ")[2], selectionArgs);
-                    } else if (LOST_MESSAGE.equals(type)) {
-                        recoverLostMessages(msg);
-                    } else if (ACK_INSERT.equals(type)) {
-                        String id = msg.split(" ")[1];
+                if (JOIN.equals(type) || NEWJOIN.equals(type)) {
+                    updateRingWithNewNode(msg.split(" ")[1]);
+                } else if (NODE_UPDATE.equals(type)) {
+                    //Msg contains type and hashed node id and node id of all the nodes
+                    // in the circular list return by the 5554 response for joining request
+                    updateNodeList(msg);
+                    Log.v("Me Log Node List", node.toString());
+                } else if (MESSAGE.equals(type) || MESSAGE_REPLICATE.equals(type)) {
+                    String key = msg.split(" ")[1];
+                    String value = msg.split(" ")[2];
+                    String originator_port = msg.split(" ")[3];
+                    String insert_id = msg.split(" ")[4];
+                    ContentValues cv = new ContentValues();
+                    cv.put(KEY_FIELD, key);
+                    cv.put(VALUE_FIELD, value);
+                    //Message then treat it as normal insert
+                    //other wise directly insert it as replication
+                    if (MESSAGE.equals(type)) {
+                        insertData(cv);
+                    } else if (MESSAGE_REPLICATE.equals(type)) {
+                        insertData(cv);
+                    }
+                    sendAckToOriginator(originator_port, insert_id);
+                } else if (QUERY.equals(type)) {
+                    publishProgress(msg);
+                } else if (RESULT.equals(type)) {
+                    updateResultMapObject(msg);
+                } else if (DELETE.equals(type)) {
+                    String[] selectionArgs = {msg.split(" ")[1]};
+                    delete(mUri, msg.split(" ")[2], selectionArgs);
+                } else if (LOST_MESSAGE.equals(type)) {
+                    recoverLostMessages(msg);
+                } else if (ACK_INSERT.equals(type)) {
+                    String id = msg.split(" ")[1];
+                    synchronized (id) {
                         if (hmResult_Insert.containsKey(id)) {
                             hmResult_Insert.put(id, hmResult_Insert.get(id) + 1);
                         } else {
                             hmResult_Insert.put(id, 1);
                         }
-                        Log.v("Me Log ", "Received Ack Insertion id: " + id );
-
                     }
-
-                    oos.close();
-                    ois.close();
-                    clientS.close();
-                } catch (SocketTimeoutException ex) {
-                    Log.e("Me Log Error: ", ex.getMessage() + " Server Catch Exception");
-                } catch (IOException ex) {
-                    Log.v("Me Log Error: ", ex.getMessage() + "  Server Catch Exception");
-                } catch (ClassNotFoundException e) {
-                    e.printStackTrace();
+                    Log.v("Me Log ", "Received Ack Insertion id: " + id);
                 }
             }
         }
@@ -596,7 +641,7 @@ public class SimpleDynamoProvider extends ContentProvider {
         private void sendAckToOriginator(String originator_port, String id) {
             String[] msgToSend = {ACK_INSERT, originator_port, id};
             sendMessageToClient(msgToSend);
-            Log.v("Me Log ", "SEnding Ack Insertion id: " + id + " Port: " + originator_port);
+            Log.v("Me Log ", "Sending Ack Insertion id: " + id + " Port: " + originator_port);
         }
 
         private void updateNodeList(String msg) {
@@ -604,18 +649,20 @@ public class SimpleDynamoProvider extends ContentProvider {
         }
 
         private void recoverLostMessages(String msg) {
-            String[] data = msg.split(" ");
+            Log.v("Me Log", "Recovery Message data " + msg + " Message ");
+            String[] data = msg.trim().split(" ");
             for (int i = 1; i < data.length; i += 2) {
                 ContentValues cv = new ContentValues();
                 cv.put(KEY_FIELD, data[i]);
                 cv.put(VALUE_FIELD, data[i + 1]);
                 insertData(cv);
             }
+            recover_counter += 1;
             Log.v("Me Log1 ", "Recovered Log data Total Count " + data.length / 2);
-            //Releasing the lock aquired for lost messages insertions
-            Lock lock = hmLock.get(myPort);
-//            lock.unlock();
-            init_Lock = true;
+            //Releasing the lock acquired for lost messages insertions
+//            Lock lock = hmLock.get(myPort);
+////            lock.unlock();
+//            init_Lock = true;
         }
 
         private void updateRingWithNewNode(String newNodeId) {
@@ -682,7 +729,7 @@ public class SimpleDynamoProvider extends ContentProvider {
                 } while (mc.moveToNext());
             }
             if (!msg.isEmpty()) {
-              String[] msgToSend = {LOST_MESSAGE, newNodeId, msg.trim()};
+              String[] msgToSend = {LOST_MESSAGE, newNodeId, msg};
               sendMessageToClient(msgToSend);
             }
         }
@@ -721,6 +768,7 @@ public class SimpleDynamoProvider extends ContentProvider {
             } else {
                 //if we are fetching only one key value then return
                 //directly to the requester
+
                 String valueContent = getValueFromKey(keyString);
                 String keyValues = "";
                 if (!valueContent.isEmpty()) {
@@ -737,6 +785,12 @@ public class SimpleDynamoProvider extends ContentProvider {
             String uniqueId = data[1];
             Log.v("Me Log ", "Putting the data for key " + uniqueId);
             if (hmResult.containsKey(uniqueId)) {
+//                List<ValueAndVersion> val = hmCursorData.get(uniqueId);
+//                for (int i = 2; i < data.length; i += 3) {
+//                    //to remove any space values
+//                    if (data[i].trim().isEmpty()) i++;
+//                    val.add(new ValueAndVersion(data[i], data[i+1],Integer.parseInt(data[i+2])));
+//                }
                 MatrixCursor cr = hmCursor.get(uniqueId);
                 for (int i = 2; i < data.length; i += 2) {
                     //to remove any space values
@@ -748,6 +802,13 @@ public class SimpleDynamoProvider extends ContentProvider {
                 }
                 hmResult.put(uniqueId, hmResult.get(uniqueId) + 1);
             } else {
+//                ArrayList<ValueAndVersion> val = new ArrayList<>();
+//                hmCursorData.put(uniqueId, val);
+//                for (int i = 2; i < data.length; i += 3) {
+//                    //to remove any space values
+//                    if (data[i].trim().isEmpty()) i++;
+//                    val.add(new ValueAndVersion(data[i], data[i+1],Integer.parseInt(data[i+2])));
+//                }
                 MatrixCursor cr = new MatrixCursor(columns);
                 for (int i = 2; i < data.length; i += 2) {
                     //to remove any space values
@@ -769,21 +830,15 @@ public class SimpleDynamoProvider extends ContentProvider {
         @Override
         protected Void doInBackground(String... params) {
             String type = params[0];
-            Log.wtf("Me Log ", "In Client Task " + Arrays.toString(params));
+            Log.v("Me Log ", "In Client Task " + Arrays.toString(params));
             if (NEWJOIN.equals(type) || JOIN.equals(type)) {
                 String remotePort = null;
-//                if (JOIN.equals(type)) {
-//                    remotePort = Integer.parseInt(params[2]) * 2 + "";
-//                }
-//                else if (NEWJOIN.equals(type)) {
-//                    remotePort = 5554 * 2 + "";
-//                }
                 for (int i = 0; i < REMOTE_PORTS.length; i++) {
                     try {
                         remotePort = REMOTE_PORTS[i];
                         Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
                                 Integer.parseInt(remotePort));
-                        socket.setSoTimeout(300);
+                        socket.setSoTimeout(TIME_OUT);
                         String msgToSend = JOIN + " " + params[1];
                         ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
                         oos.writeObject(msgToSend);
@@ -821,16 +876,12 @@ public class SimpleDynamoProvider extends ContentProvider {
                                 remotePort = REMOTE_PORTS[i];
                                 Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
                                         Integer.parseInt(remotePort));
-                                socket.setSoTimeout(300);
+                                socket.setSoTimeout(TIME_OUT);
                                 ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
                                 oos.writeObject(msgToSend);
                                 oos.flush();
                                 ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());
                                 String ack = (String)ois.readObject();
-//                                PrintWriter pw = new PrintWriter(socket.getOutputStream(), true);
-//                                pw.println(msgToSend);
-//                                pw.flush();
-//                                pw.close();
                                 ois.close();
                                 oos.close();
                                 socket.close();
@@ -858,16 +909,12 @@ public class SimpleDynamoProvider extends ContentProvider {
                             remotePort = ports[i];
                             Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
                                     Integer.parseInt(remotePort));
-                            socket.setSoTimeout(300);
-//                            PrintWriter pw = new PrintWriter(socket.getOutputStream(), true);
-//                            pw.println(msgToSend);
+                            socket.setSoTimeout(TIME_OUT);
                             ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
                             oos.writeObject(msgToSend);
                             oos.flush();
                             ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());
                             String ack = (String)ois.readObject();
-//                            pw.flush();
-//                            pw.close();
                             oos.close();
                             socket.close();
                         } catch (UnknownHostException e) {
@@ -903,32 +950,33 @@ public class SimpleDynamoProvider extends ContentProvider {
                     remotePort = params[1];
                     msgToSend = params[0] + " " + params[2];
                 } else {
-                    Log.wtf("Me Log What", "!!!No type in Send Message" + params);
+
+                    Log.wtf("Me Log What", "!!!No type in Send Message" + Arrays.toString(params));
                 }
                 try {
                     Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
                             Integer.parseInt(remotePort) * 2);
-                    socket.setSoTimeout(300);
-//                    PrintWriter pw = new PrintWriter(socket.getOutputStream(), true);
-//                    pw.println(msgToSend.trim());
-//                    pw.flush();
-//                    pw.close();
+                    socket.setSoTimeout(TIME_OUT);
                     ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
                     oos.writeObject(msgToSend);
                     oos.flush();
                     ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());
                     String ack = (String)ois.readObject();
+
                     socket.close();
                 } catch (SocketTimeoutException ex) {
-                    Log.e("Me Log Error:FAILED , ", ex.getMessage() + " ");
+                    Log.e("Me Log Error:FAILED , ", ex.getMessage() + " SocketTime Out");
+                    ex.printStackTrace();
                 } catch (UnknownHostException ex) {
-                    Log.e("Me Log Error: FAILED , ", ex.getMessage() + " ");
+                    Log.e("Me Log Error: FAILED , ", ex.getMessage() + " Unkown HostException");
+                    ex.printStackTrace();
                 } catch (IOException ex) {
-                    Log.e("Me Log Error: FAILED , ", ex.getMessage() + " ");
+                    Log.e("Me Log Error: FAILED , ", ex.getMessage() + " IOException");
+                    ex.printStackTrace();
                 } catch (ClassNotFoundException e) {
                     e.printStackTrace();
+                    e.printStackTrace();
                 }
-
             }
         }
     }
